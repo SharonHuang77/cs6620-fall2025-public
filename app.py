@@ -7,6 +7,10 @@ from flask_cors import CORS
 from pydub import AudioSegment
 import tempfile
 
+# In your Flask app file, update a comment or add a version identifier:
+# Version: 1.0.1
+# Built with GitHub Actions
+
 app = Flask(__name__)
 CORS(app)
 
@@ -571,4 +575,4 @@ def auto_load_data():
 if __name__ == '__main__':
     # Auto-load CSV and audio files on startup
     auto_load_data()
-    app.run(debug=True, host='0.0.0.0', port=3000)
+    app.run(debug=True, host='0.0.0.0', port=5000)
