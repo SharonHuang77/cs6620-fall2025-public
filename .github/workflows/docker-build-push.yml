@@ -34,3 +34,60 @@ jobs:
             build.workflow=${{ github.workflow }}
             build.run_id=${{ github.run_id }}
             build.run_number=${{ github.run_number }}
+
+  deploy:
+    name: Deploy to EC2 via SSM
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Send SSM deploy command to EC2
+        id: ssm
+        run: |
+          IMAGE="${{ secrets.DOCKERHUB_USERNAME }}/cs6620-app:latest"
+          CONTAINER="cs6620-app"
+
+          DEPLOY_METHOD="ssm-gha"
+          DEPLOY_ID="${{ github.run_number }}-${{ github.sha }}"
+          DEPLOY_TIME="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+
+          COMMAND_ID=$(aws ssm send-command \
+            --instance-ids "${{ secrets.EC2_INSTANCE_ID }}" \
+            --document-name "AWS-RunShellScript" \
+            --comment "Deploy ${DEPLOY_METHOD} id=${DEPLOY_ID} time=${DEPLOY_TIME}" \
+            --parameters commands="[
+              \"echo DEPLOY_METHOD=${DEPLOY_METHOD}\",
+              \"echo DEPLOY_ID=${DEPLOY_ID}\",
+              \"echo DEPLOY_TIME=${DEPLOY_TIME}\",
+              \"sudo docker pull ${IMAGE}\",
+              \"sudo docker stop ${CONTAINER} || true\",
+              \"sudo docker rm ${CONTAINER} || true\",
+              \"sudo docker run -d --name ${CONTAINER} -p 80:5000 --restart unless-stopped -e DEPLOY_METHOD=${DEPLOY_METHOD} -e DEPLOY_ID=${DEPLOY_ID} -e DEPLOY_TIME=${DEPLOY_TIME} ${IMAGE}\"
+            ]" \
+            --query "Command.CommandId" \
+            --output text)
+
+          echo "command_id=${COMMAND_ID}" >> "$GITHUB_OUTPUT"
+          echo "SSM CommandId=${COMMAND_ID}"
+
+      - name: Verify Deployment Status
+        run: |
+          CMD="${{ steps.ssm.outputs.command_id }}"
+          IID="${{ secrets.EC2_INSTANCE_ID }}"
+
+          echo "Waiting for SSM Command ${CMD} to complete..."
+          aws ssm wait command-executed --command-id "${CMD}" --instance-id "${IID}"
+
+          echo "Fetching command output..."
+          aws ssm get-command-invocation \
+            --command-id "${CMD}" \
+            --instance-id "${IID}" \
+            --query "{Status:Status,ResponseCode:ResponseCode,Stdout:StandardOutputContent,Stderr:StandardErrorContent}" \
+            --output json
